@@ -65,7 +65,7 @@ def drop_connect(
 
 class SEmodule(nn.Module):
     """
-    Interdependencies betwee the channels of convolutional features
+    Interdependencies between the channels of convolutional features
     https://arxiv.org/pdf/1709.01507.pdf
     """
 
@@ -164,3 +164,70 @@ class MBConvBlock(nn.Module):
             x += input
 
         return x
+
+
+class MBConv1(MBConvBlock):
+
+    def __init__(
+            self,
+            in_channels: int,
+            out_channels: int,
+            kernel_size: int = 3,
+            stride: int = 1,
+            scale_f: int = 24,
+            training: bool = True,
+            drop_p: float = 0
+    ):
+        super(MBConv1, self).__init__(
+            in_channels = in_channels,
+            out_channels = out_channels,
+            expansion_f = 1,
+            kernel_size = kernel_size,
+            stride = stride,
+            scale_f = scale_f,
+            training = training,
+            drop_p = drop_p
+        )
+
+class MBConv6(MBConvBlock):
+
+    def __init__(
+            self,
+            in_channels: int,
+            out_channels: int,
+            kernel_size: int = 3,
+            stride: int = 1,
+            scale_f: int = 24,
+            training: bool = True,
+            drop_p: float = 0
+    ):
+        super(MBConv6, self).__init__(
+            in_channels = in_channels,
+            out_channels = out_channels,
+            expansion_f = 6,
+            kernel_size = kernel_size,
+            stride = stride,
+            scale_f = scale_f,
+            training = training,
+            drop_p = drop_p
+        )
+
+class EfficientNet(nn.Module):
+
+    """
+
+    """
+
+    def __init__(
+            self,
+            stem_params: list = [3, 32, 2, 1],
+            mb_params: dict,
+
+    ):
+        super(EfficientNet, self).__init__()
+
+        # Stem
+        self.stem_conv = nn.Conv2d(*stem_params)
+        self.bn0 = nn.BatchNorm2d(stem_params[1])
+
+        pass
