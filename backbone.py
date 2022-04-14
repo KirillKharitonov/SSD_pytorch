@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Union
 
 
 class ConvLayer(nn.Module):
@@ -126,10 +127,11 @@ class MBConvBlock(nn.Module):
 
         self.skip_connection = (in_channels == out_channels) and (stride == 1)
 
-        self.expansion = nn.Conv2d(
-            in_channels = in_channels,
-            out_channels = expanded_ch,
-            kernel_size = 1
+        self.expansion = ConvLayer(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride
         )
 
         self.depthwise = ConvLayer(
@@ -212,6 +214,16 @@ class MBConv6(MBConvBlock):
             drop_p = drop_p
         )
 
+
+def scale_width(w, w_factor):
+  """Scales width given a scale factor"""
+  w *= w_factor
+  new_w = (int(w+4) // 8) * 8
+  new_w = max(8, new_w)
+  if new_w < 0.9*w:
+     new_w += 8
+  return int(new_w)
+
 class EfficientNet(nn.Module):
 
     """
@@ -221,13 +233,68 @@ class EfficientNet(nn.Module):
     def __init__(
             self,
             stem_params: list = [3, 32, 2, 1],
-            mb_params: dict,
+            num_of_mb6_blocks: int = 6,
+            out_size: int = 1000,
+            w_factor: Union[int, float] = 1,
+            d_factor: Union[int, float] = 1,
+            mb1_params: list,
+            mb6_params: dict,
+            last_conv_params: list
 
     ):
         super(EfficientNet, self).__init__()
 
-        # Stem
-        self.stem_conv = nn.Conv2d(*stem_params)
-        self.bn0 = nn.BatchNorm2d(stem_params[1])
+        assert num_of_mb6_blocks == len(mb6_params.keys()), \
+            'number of MBConv6 layers must be the same as amount of keys in dict'
 
-        pass
+        # Stem
+        self.stem_conv = ConvLayer(*stem_params)
+
+        # first MBConv1 block
+        self.mbconv1 = MBConv1(*mb1_params)
+
+        # second block
+        self.mbconv6_blocks = nn.ModuleList([])
+        for i in range(num_of_mb6_blocks):
+            self.mbconv6_blocks.append(
+                MBConv6(*mb6_params[i])
+            )
+
+        self.conv = ConvLayer(*last_conv_params)
+
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(last_conv_params[1], out_size)
+        )
+
+        self._initialize_weights()
+
+
+    def _initialize_weights(self) -> None:
+        """
+        Weights initialization.
+        For convolutional blocks there is "He initialization".
+        :return:
+            None
+        """
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+            elif isinstance(module, nn.BatchNorm2d):
+                nn.init.constant_(module.weight, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        x = self.stem_conv(x)
+        x = self.mbconv1(x)
+        for block in self.mbconv6_blocks:
+            x = block(x)
+        x = self.conv(x)
+        x = self.head(x)
+
+        return x
+
+
