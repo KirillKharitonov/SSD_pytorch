@@ -3,6 +3,31 @@ import torch.nn as nn
 import numpy as np
 from typing import Union
 
+base_model = [
+    # expand ratio, channels, layers, kernel_size, stride
+    [1, 16, 1, 3, 1],
+    [6, 24, 2, 3, 2],
+    [6, 40, 2, 5, 2],
+    [6, 80, 3, 5, 1],
+    [6, 112, 3, 5, 1],
+    [6, 192, 4, 5, 2],
+    [6, 320, 1, 3, 1]
+]
+
+phi_vals = {
+    # model_version : (phi_value, resolution, drop_rate)
+    'e0': (0, 224, 0.2),
+    'e1': (0.5, 240, 0.2),
+    'e2': (1, 260, 0.3),
+    'e3': (2, 300, 0.3),
+    'e4': (3, 380, 0.4),
+    'e5': (4, 456, 0.4),
+    'e6': (5, 528, 0.5),
+    'e7': (6, 600, 0.5),
+}
+
+stem_params = [3, 32, 2, 1]
+
 
 class ConvLayer(nn.Module):
     """
@@ -27,7 +52,8 @@ class ConvLayer(nn.Module):
             out_channels = out_channels,
             kernel_size = kernel_size,
             stride = stride,
-            padding = padding
+            padding = padding,
+            groups = groups
         )
         self.batch_norm = nn.BatchNorm2d(out_channels) if bn else nn.Identity()
         self.activation = nn.SiLU() if act else nn.Identity()
@@ -129,9 +155,10 @@ class MBConvBlock(nn.Module):
 
         self.expansion = ConvLayer(
             in_channels,
-            out_channels,
-            kernel_size,
-            stride
+            expanded_ch,
+            kernel_size = 3,
+            stride = 1,
+            padding = 1
         )
 
         self.depthwise = ConvLayer(
@@ -188,8 +215,9 @@ class MBConv1(MBConvBlock):
             stride = stride,
             scale_f = scale_f,
             training = training,
-            drop_p = drop_p
+            drop_p = 0.1
         )
+
 
 class MBConv6(MBConvBlock):
 
@@ -211,65 +239,57 @@ class MBConv6(MBConvBlock):
             stride = stride,
             scale_f = scale_f,
             training = training,
-            drop_p = drop_p
+            drop_p = 0.1
         )
 
 
-def scale_width(w, w_factor):
-  """Scales width given a scale factor"""
-  w *= w_factor
-  new_w = (int(w+4) // 8) * 8
-  new_w = max(8, new_w)
-  if new_w < 0.9*w:
-     new_w += 8
-  return int(new_w)
+# def scale_width(w, w_factor):
+#     """Scales width given a scale factor"""
+#     w *= w_factor
+#     new_w = (int(w + 4) // 8) * 8
+#     new_w = max(8, new_w)
+#     if new_w < 0.9 * w:
+#         new_w += 8
+#     return int(new_w)
+
 
 class EfficientNet(nn.Module):
-
     """
 
     """
 
-    def __init__(
-            self,
-            stem_params: list = [3, 32, 2, 1],
-            num_of_mb6_blocks: int = 6,
-            out_size: int = 1000,
-            w_factor: Union[int, float] = 1,
-            d_factor: Union[int, float] = 1,
-            mb1_params: list,
-            mb6_params: dict,
-            last_conv_params: list
+    def __init__(self,
+                 version: str,
+                 num_classes: int,
+                 last_channels: int = 1280
+                 # mb1_params: list,
+                 # mb6_params: dict,
+                 # last_conv_params: list,
+                 # stem_params: list = [3, 32, 2, 1],
+                 # num_of_mb6_blocks: int = 6,
+                 # out_size: int = 1000,
+                 # w_factor: Union[int, float] = 1,
+                 # d_factor: Union[int, float] = 1,
 
-    ):
+                 ):
         super(EfficientNet, self).__init__()
 
-        assert num_of_mb6_blocks == len(mb6_params.keys()), \
-            'number of MBConv6 layers must be the same as amount of keys in dict'
-
+        width_factor, depth_factor, drop_rate = self.calculate_factors(version)
+        self.drop_rate = drop_rate
+        self.last_channels = int(np.ceil(last_channels * width_factor))
         # Stem
         self.stem_conv = ConvLayer(*stem_params)
 
-        # first MBConv1 block
-        self.mbconv1 = MBConv1(*mb1_params)
+        # Features
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.features = self.create_features(width_factor, depth_factor, self.last_channels)
 
-        # second block
-        self.mbconv6_blocks = nn.ModuleList([])
-        for i in range(num_of_mb6_blocks):
-            self.mbconv6_blocks.append(
-                MBConv6(*mb6_params[i])
-            )
-
-        self.conv = ConvLayer(*last_conv_params)
-
-        self.head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(last_conv_params[1], out_size)
+        # Classifier
+        self.classifier = nn.Sequential(
+            nn.Linear(last_channels, num_classes)
         )
 
         self._initialize_weights()
-
 
     def _initialize_weights(self) -> None:
         """
@@ -286,15 +306,78 @@ class EfficientNet(nn.Module):
             elif isinstance(module, nn.BatchNorm2d):
                 nn.init.constant_(module.weight, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def calculate_factors(
+            self,
+            version: str,
+            alpha: float = 1.2,
+            beta: float = 1.1
+    ):
+        phi, res, drop_ = phi_vals[version]
+        depth_factor = alpha ** phi
+        width_factor = beta ** phi
+        return width_factor, depth_factor, drop_
+
+    def create_features(
+            self,
+            width_factor: float,
+            depth_factor: float,
+            last_channels: int
+    ):
+
+        in_channels = int(stem_params[1] * width_factor)
+        features = []
+
+        curr_block = 0
+        for expand_ratio, channels, layers, kernel_size, stride in base_model:
+            out_channels = int(4 * np.ceil((channels * width_factor) / 4))
+            scaled_layers = int(np.ceil(layers * depth_factor))
+
+            for layer in range(scaled_layers):
+                if curr_block == 0:
+                    features.append(
+                        MBConv1(
+                            in_channels,
+                            out_channels,
+                            kernel_size,
+                            stride = stride if layer == 0 else 1,
+                            drop_p = self.drop_rate
+                        )
+                    )
+
+                    in_channels = out_channels
+                else:
+                    features.append(
+                        MBConv6(
+                            in_channels,
+                            out_channels,
+                            kernel_size,
+                            stride = stride if layer == 0 else 1,
+                            drop_p = drop_rate
+                        )
+                    )
+                    in_channels = out_channels
+
+                curr_block += 1
+
+            features.append(
+                ConvLayer(
+                    in_channels,
+                    last_channels,
+                    kernel_size = 1,
+                    stride = 1,
+                    padding = 0
+                )
+            )
+
+            return nn.Sequential(*features)
+
+    def forward(
+            self,
+            x: torch.Tensor
+    ) -> torch.Tensor:
 
         x = self.stem_conv(x)
-        x = self.mbconv1(x)
-        for block in self.mbconv6_blocks:
-            x = block(x)
-        x = self.conv(x)
-        x = self.head(x)
-
+        print(x.shape)
+        x = self.pool(self.features(x))
+        x = self.classifier(x.view(x.shape[0], -1))
         return x
-
-
