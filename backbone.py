@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Union
 
 base_model = [
     # expand ratio, channels, layers, kernel_size, stride
@@ -243,16 +242,6 @@ class MBConv6(MBConvBlock):
         )
 
 
-# def scale_width(w, w_factor):
-#     """Scales width given a scale factor"""
-#     w *= w_factor
-#     new_w = (int(w + 4) // 8) * 8
-#     new_w = max(8, new_w)
-#     if new_w < 0.9 * w:
-#         new_w += 8
-#     return int(new_w)
-
-
 class EfficientNet(nn.Module):
     """
 
@@ -262,14 +251,6 @@ class EfficientNet(nn.Module):
                  version: str,
                  num_classes: int,
                  last_channels: int = 1280
-                 # mb1_params: list,
-                 # mb6_params: dict,
-                 # last_conv_params: list,
-                 # stem_params: list = [3, 32, 2, 1],
-                 # num_of_mb6_blocks: int = 6,
-                 # out_size: int = 1000,
-                 # w_factor: Union[int, float] = 1,
-                 # d_factor: Union[int, float] = 1,
 
                  ):
         super(EfficientNet, self).__init__()
@@ -352,7 +333,7 @@ class EfficientNet(nn.Module):
                             out_channels,
                             kernel_size,
                             stride = stride if layer == 0 else 1,
-                            drop_p = drop_rate
+                            drop_p = self.drop_rate
                         )
                     )
                     in_channels = out_channels
