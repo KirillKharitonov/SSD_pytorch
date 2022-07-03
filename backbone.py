@@ -358,7 +358,6 @@ class EfficientNet(nn.Module):
     ) -> torch.Tensor:
 
         x = self.stem_conv(x)
-        print(x.shape)
         x = self.pool(self.features(x))
         x = self.classifier(x.view(x.shape[0], -1))
         return x
