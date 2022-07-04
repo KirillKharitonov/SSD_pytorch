@@ -1,12 +1,22 @@
 import torch
 import torch.nn as nn
 import numpy as np
-
+from backbone import *
 
 class SSD(nn.Module):
 
-    def __init__(self):
+    def __init__(
+            self,
+            backbone_version: str,
+            num_classes: int,
+    ):
         super(SSD, self).__init__()
+
+        bb_model = EfficientNet(backbone_version, num_classes)
+        self.backbone = nn.ModuleList([bb_model.stem_conv, bb_model.features])
+        self.additional_layers = AdditionalLayers(1280)
+
+    def forward(self, x):
         pass
 
 
@@ -27,7 +37,7 @@ class AdditionalLayers(nn.Module):
                 self.layers.append(nn.Conv2d(1280, c, kernels[i]))
             else:
                 if i in exes:
-                    self.layers.append(nn.Conv2d(channels[i-1], c, kernels[i], stride = 2))
+                    self.layers.append(nn.Conv2d(channels[i - 1], c, kernels[i], stride = 2))
                 else:
                     self.layers.append(nn.Conv2d(channels[i - 1], c, kernels[i], stride = 1))
 
@@ -35,5 +45,9 @@ class AdditionalLayers(nn.Module):
 
     def forward(self, x):
 
-        pass
+        detections = [x]
 
+        for l in self.layers:
+            detections.append(l(x))
+
+        return detections
